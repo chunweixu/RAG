@@ -2,10 +2,15 @@
 from datasets import load_dataset
 import anthropic
 import random
+import os
+from http import HTTPStatus
+import dashscope
+import json
 from collections import defaultdict
 
+dashscope.api_key
 # 全局常量定义
-DATA_PATH = "/Users/xuchunwei/Documents/Project/data/MultiHopRAG.json"
+DATA_PATH = "./data/MultiHopRAG.json"
 TRANSLATION_PROMPT = "Translate the following text into Chinese. Retain all names, company names, and other proper nouns in the original language. Here is the text:"
 
 # 添加输出路径常量
@@ -21,31 +26,60 @@ def save_json(data, filepath):
     with open(filepath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def translate_text(text, model="claude-3-5-sonnet-20241022", max_tokens=1024):
-    """
-    使用Anthropic的Claude模型进行翻译。
+# def translate_text(text, model="claude-3-5-sonnet-20241022", max_tokens=1024):
+#     """
+#     使用Anthropic的Claude模型进行翻译。
 
-    参数:
-    - text (str): 要翻译的文本。
-    - api_key (str): Anthropic API密钥。
-    - model (str): 使用的Claude模型名称。
-    - max_tokens (int): 生成的最大token数量。
+#     参数:
+#     - text (str): 要翻译的文本。
+#     - api_key (str): Anthropic API密钥。
+#     - model (str): 使用的Claude模型名称。
+#     - max_tokens (int): 生成的最大token数量。
     
-    返回:
-    - str: Claude模型的翻译结果。
-    """
-    client = anthropic.Anthropic()
+#     返回:
+#     - str: Claude模型的翻译结果。
+#     """
+#     client = anthropic.Anthropic(api_key)
     
-    # 调用Claude模型进行翻译
-    message = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=[
-            {"role": "user", "content": text}
-        ]
+#     # 调用Claude模型进行翻译
+#     message = client.messages.create(
+#         model=model,
+#         max_tokens=max_tokens,
+#         messages=[
+#             {"role": "user", "content": text}
+#         ]
+#     )
+
+#     return message.content[0].text
+
+def translate_text(content):
+    messages = [{'role': 'user', 'content': content}]
+    responses = dashscope.Generation.call(
+        "qwen-max",
+        messages=messages,
+        result_format='message',  # set the result to be "message" format.
+        stream=True,  # set streaming output
+        incremental_output=True  # get streaming output incrementally
     )
-
-    return message.content[0].text
+    
+    response_content = ""  # 初始化一个空字符串来收集输出
+    
+    for response in responses:
+        if response.status_code == HTTPStatus.OK:
+            output_text = response.output.choices[0]['message']['content']
+            response_content += output_text  # 将内容追加到response_content中
+        else:
+            error_message = (
+                'Request id: %s, Status code: %s, error code: %s, error message: %s' % (
+                response.request_id, response.status_code,
+                response.code, response.message)
+            )
+             # 记录错误信息到日志
+            return content
+            print(error_message)
+    
+    # logger.info(f"API call completed with content: {response_content}")  # 记录成功信息到日志
+    return response_content
 
 # 定义翻译的prompt，确保人名和专有名词保留原文
 translation_prompt = "Translate the following text into Chinese. Retain all names, company names, and other proper nouns in the original language. Here is the text:"
@@ -54,7 +88,8 @@ translation_prompt = "Translate the following text into Chinese. Retain all name
 def process_dataset(dataset):
     processed_data = []
 
-    for item in dataset:
+    for i in range(len(dataset)):
+        item = dataset[i]
         # 1. 翻译 query 和 answer 字段
         translated_query = translate_text(f"{translation_prompt} {item['query']}")
         translated_answer = translate_text(f"{translation_prompt} {item['answer']}")
@@ -125,7 +160,7 @@ def create_train_eval_split(dataset, eval_size=50):
     # 统计每种 question_type 的数量
     type_to_items = defaultdict(list)
     for item in dataset:
-        question_type = item['question_type']
+        question_type = item['Question_Type']
         type_to_items[question_type].append(item)
 
     # 计算每种类型在评测集中的样本数
@@ -154,11 +189,9 @@ def main():
     # 1. 读取数据
     dataset = load_dataset('json', data_files=DATA_PATH)
      # 测试模式：只取前5条数据
-    test_dataset = dataset['train'][:5]
-    print(f"测试模式：只处理前5条数据")
+    test_dataset = dataset['train']
     
     # 2. 处理数据集并保存
-    # processed_dataset = process_dataset(dataset['train'])
     processed_dataset = process_dataset(test_dataset)
     save_json(processed_dataset, PROCESSED_DATA_PATH)
     print(f"已保存处理后的数据集到: {PROCESSED_DATA_PATH}")
